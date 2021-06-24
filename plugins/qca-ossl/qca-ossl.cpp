@@ -1266,9 +1266,9 @@ public:
         EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
         EVP_PKEY_derive_init(pctx);
         EVP_PKEY_CTX_set_hkdf_md(pctx, EVP_sha256());
-        EVP_PKEY_CTX_set1_hkdf_salt(pctx, salt.data(), int(salt.size()));
-        EVP_PKEY_CTX_set1_hkdf_key(pctx, secret.data(), int(secret.size()));
-        EVP_PKEY_CTX_add1_hkdf_info(pctx, info.data(), int(info.size()));
+        EVP_PKEY_CTX_set1_hkdf_salt(pctx, reinterpret_cast<const unsigned char *>(salt.data()), int(salt.size()));
+        EVP_PKEY_CTX_set1_hkdf_key(pctx, reinterpret_cast<const unsigned char *>(secret.data()), int(secret.size()));
+        EVP_PKEY_CTX_add1_hkdf_info(pctx, reinterpret_cast<const unsigned char *>(info.data()), int(info.size()));
         size_t outlen = out.size();
         EVP_PKEY_derive(pctx, reinterpret_cast<unsigned char *>(out.data()), &outlen);
         EVP_PKEY_CTX_free(pctx);
@@ -1442,15 +1442,17 @@ public:
                 int type = EVP_PKEY_id(pkey);
 
                 if (type == EVP_PKEY_RSA) {
-                    RSA *rsa = EVP_PKEY_get0_RSA(pkey);
+                    RSA *rsa = EVP_PKEY_get1_RSA(pkey);
                     if (RSA_private_encrypt(raw.size(),
                                             (unsigned char *)raw.data(),
                                             (unsigned char *)out.data(),
                                             rsa,
                                             RSA_PKCS1_PADDING) == -1) {
                         state = SignError;
+                        RSA_free(rsa);
                         return SecureArray();
                     }
+                    RSA_free(rsa);
                 } else if (type == EVP_PKEY_DSA) {
                     state = SignError;
                     return SecureArray();
@@ -1481,15 +1483,17 @@ public:
                 int type = EVP_PKEY_id(pkey);
 
                 if (type == EVP_PKEY_RSA) {
-                    RSA *rsa = EVP_PKEY_get0_RSA(pkey);
+                    RSA *rsa = EVP_PKEY_get1_RSA(pkey);
                     if ((len = RSA_public_decrypt(sig.size(),
                                                   (unsigned char *)sig.data(),
                                                   (unsigned char *)out.data(),
                                                   rsa,
                                                   RSA_PKCS1_PADDING)) == -1) {
+                        RSA_free(rsa);
                         state = VerifyError;
                         return false;
                     }
+                    RSA_free(rsa);
                 } else if (type == EVP_PKEY_DSA) {
                     state = VerifyError;
                     return false;
@@ -1924,7 +1928,7 @@ public:
             return;
 
         // extract the public key into DER format
-        RSA *          rsa_pkey = EVP_PKEY_get0_RSA(evp.pkey);
+        const RSA *          rsa_pkey = EVP_PKEY_get0_RSA(evp.pkey);
         int            len      = i2d_RSAPublicKey(rsa_pkey, nullptr);
         SecureArray    result(len);
         unsigned char *p = (unsigned char *)result.data();
@@ -1946,7 +1950,7 @@ public:
 
     int maximumEncryptSize(EncryptionAlgorithm alg) const override
     {
-        RSA *rsa  = EVP_PKEY_get0_RSA(evp.pkey);
+        RSA *rsa  = EVP_PKEY_get1_RSA(evp.pkey);
         int  size = 0;
         switch (alg) {
         case EME_PKCS1v15:
@@ -1955,20 +1959,18 @@ public:
         case EME_PKCS1_OAEP:
             size = RSA_size(rsa) - 41 - 1;
             break;
-        case EME_PKCS1v15_SSL:
-            size = RSA_size(rsa) - 11 - 1;
-            break;
         case EME_NO_PADDING:
             size = RSA_size(rsa) - 1;
             break;
         }
+        RSA_free(rsa);
 
         return size;
     }
 
     SecureArray encrypt(const SecureArray &in, EncryptionAlgorithm alg) override
     {
-        RSA *       rsa = EVP_PKEY_get0_RSA(evp.pkey);
+        RSA *       rsa = EVP_PKEY_get1_RSA(evp.pkey);
         SecureArray buf = in;
         int         max = maximumEncryptSize(alg);
 
@@ -1984,13 +1986,11 @@ public:
         case EME_PKCS1_OAEP:
             pad = RSA_PKCS1_OAEP_PADDING;
             break;
-        case EME_PKCS1v15_SSL:
-            pad = RSA_SSLV23_PADDING;
-            break;
         case EME_NO_PADDING:
             pad = RSA_NO_PADDING;
             break;
         default:
+            RSA_free(rsa);
             return SecureArray();
             break;
         }
@@ -2001,6 +2001,7 @@ public:
                 RSA_private_encrypt(buf.size(), (unsigned char *)buf.data(), (unsigned char *)result.data(), rsa, pad);
         else
             ret = RSA_public_encrypt(buf.size(), (unsigned char *)buf.data(), (unsigned char *)result.data(), rsa, pad);
+        RSA_free(rsa);
 
         if (ret < 0)
             return SecureArray();
@@ -2011,7 +2012,7 @@ public:
 
     bool decrypt(const SecureArray &in, SecureArray *out, EncryptionAlgorithm alg) override
     {
-        RSA *       rsa = EVP_PKEY_get0_RSA(evp.pkey);
+        RSA *       rsa = EVP_PKEY_get1_RSA(evp.pkey);
         SecureArray result(RSA_size(rsa));
         int         pad;
 
@@ -2022,13 +2023,11 @@ public:
         case EME_PKCS1_OAEP:
             pad = RSA_PKCS1_OAEP_PADDING;
             break;
-        case EME_PKCS1v15_SSL:
-            pad = RSA_SSLV23_PADDING;
-            break;
         case EME_NO_PADDING:
             pad = RSA_NO_PADDING;
             break;
         default:
+            RSA_free(rsa);
             return false;
             break;
         }
@@ -2038,6 +2037,7 @@ public:
             ret = RSA_private_decrypt(in.size(), (unsigned char *)in.data(), (unsigned char *)result.data(), rsa, pad);
         else
             ret = RSA_public_decrypt(in.size(), (unsigned char *)in.data(), (unsigned char *)result.data(), rsa, pad);
+        RSA_free(rsa);
 
         if (ret < 0)
             return false;
@@ -2174,7 +2174,7 @@ public:
 
     BigInteger n() const override
     {
-        RSA *         rsa = EVP_PKEY_get0_RSA(evp.pkey);
+        const RSA *         rsa = EVP_PKEY_get0_RSA(evp.pkey);
         const BIGNUM *bnn;
         RSA_get0_key(rsa, &bnn, nullptr, nullptr);
         return bn2bi(bnn);
@@ -2182,7 +2182,7 @@ public:
 
     BigInteger e() const override
     {
-        RSA *         rsa = EVP_PKEY_get0_RSA(evp.pkey);
+        const RSA *         rsa = EVP_PKEY_get0_RSA(evp.pkey);
         const BIGNUM *bne;
         RSA_get0_key(rsa, nullptr, &bne, nullptr);
         return bn2bi(bne);
@@ -2190,7 +2190,7 @@ public:
 
     BigInteger p() const override
     {
-        RSA *         rsa = EVP_PKEY_get0_RSA(evp.pkey);
+        const RSA *         rsa = EVP_PKEY_get0_RSA(evp.pkey);
         const BIGNUM *bnp;
         RSA_get0_factors(rsa, &bnp, nullptr);
         return bn2bi(bnp);
@@ -2198,7 +2198,7 @@ public:
 
     BigInteger q() const override
     {
-        RSA *         rsa = EVP_PKEY_get0_RSA(evp.pkey);
+        const RSA *         rsa = EVP_PKEY_get0_RSA(evp.pkey);
         const BIGNUM *bnq;
         RSA_get0_factors(rsa, nullptr, &bnq);
         return bn2bi(bnq);
@@ -2206,7 +2206,7 @@ public:
 
     BigInteger d() const override
     {
-        RSA *         rsa = EVP_PKEY_get0_RSA(evp.pkey);
+        const RSA *         rsa = EVP_PKEY_get0_RSA(evp.pkey);
         const BIGNUM *bnd;
         RSA_get0_key(rsa, nullptr, nullptr, &bnd);
         return bn2bi(bnd);
@@ -2339,7 +2339,7 @@ public:
             return;
 
         // extract the public key into DER format
-        DSA *          dsa_pkey = EVP_PKEY_get0_DSA(evp.pkey);
+        const DSA *          dsa_pkey = EVP_PKEY_get0_DSA(evp.pkey);
         int            len      = i2d_DSAPublicKey(dsa_pkey, nullptr);
         SecureArray    result(len);
         unsigned char *p = (unsigned char *)result.data();
@@ -2463,7 +2463,7 @@ public:
 
     DLGroup domain() const override
     {
-        DSA *         dsa = EVP_PKEY_get0_DSA(evp.pkey);
+        const DSA *         dsa = EVP_PKEY_get0_DSA(evp.pkey);
         const BIGNUM *bnp, *bnq, *bng;
         DSA_get0_pqg(dsa, &bnp, &bnq, &bng);
         return DLGroup(bn2bi(bnp), bn2bi(bnq), bn2bi(bng));
@@ -2471,7 +2471,7 @@ public:
 
     BigInteger y() const override
     {
-        DSA *         dsa = EVP_PKEY_get0_DSA(evp.pkey);
+        const DSA *         dsa = EVP_PKEY_get0_DSA(evp.pkey);
         const BIGNUM *bnpub_key;
         DSA_get0_key(dsa, &bnpub_key, nullptr);
         return bn2bi(bnpub_key);
@@ -2479,7 +2479,7 @@ public:
 
     BigInteger x() const override
     {
-        DSA *         dsa = EVP_PKEY_get0_DSA(evp.pkey);
+        const DSA *         dsa = EVP_PKEY_get0_DSA(evp.pkey);
         const BIGNUM *bnpriv_key;
         DSA_get0_key(dsa, nullptr, &bnpriv_key);
         return bn2bi(bnpriv_key);
@@ -2609,7 +2609,7 @@ public:
         if (!sec)
             return;
 
-        DH *          orig = EVP_PKEY_get0_DH(evp.pkey);
+        const DH *          orig = EVP_PKEY_get0_DH(evp.pkey);
         DH *          dh   = DH_new();
         const BIGNUM *bnp, *bng, *bnpub_key;
         DH_get0_pqg(orig, &bnp, nullptr, &bng);
@@ -2632,13 +2632,14 @@ public:
 
     SymmetricKey deriveKey(const PKeyBase &theirs) override
     {
-        DH *          dh   = EVP_PKEY_get0_DH(evp.pkey);
-        DH *          them = EVP_PKEY_get0_DH(static_cast<const DHKey *>(&theirs)->evp.pkey);
+        DH *          dh   = EVP_PKEY_get1_DH(evp.pkey);
+        const DH *          them = EVP_PKEY_get0_DH(static_cast<const DHKey *>(&theirs)->evp.pkey);
         const BIGNUM *bnpub_key;
         DH_get0_key(them, &bnpub_key, nullptr);
 
         SecureArray result(DH_size(dh));
         int         ret = DH_compute_key((unsigned char *)result.data(), bnpub_key, dh);
+        DH_free(dh);
         if (ret <= 0)
             return SymmetricKey();
         result.resize(ret);
@@ -2701,7 +2702,7 @@ public:
 
     DLGroup domain() const override
     {
-        DH *          dh = EVP_PKEY_get0_DH(evp.pkey);
+        const DH *          dh = EVP_PKEY_get0_DH(evp.pkey);
         const BIGNUM *bnp, *bng;
         DH_get0_pqg(dh, &bnp, nullptr, &bng);
         return DLGroup(bn2bi(bnp), bn2bi(bng));
@@ -2709,7 +2710,7 @@ public:
 
     BigInteger y() const override
     {
-        DH *          dh = EVP_PKEY_get0_DH(evp.pkey);
+        const DH *          dh = EVP_PKEY_get0_DH(evp.pkey);
         const BIGNUM *bnpub_key;
         DH_get0_key(dh, &bnpub_key, nullptr);
         return bn2bi(bnpub_key);
@@ -2717,7 +2718,7 @@ public:
 
     BigInteger x() const override
     {
-        DH *          dh = EVP_PKEY_get0_DH(evp.pkey);
+        const DH *          dh = EVP_PKEY_get0_DH(evp.pkey);
         const BIGNUM *bnpriv_key;
         DH_get0_key(dh, nullptr, &bnpriv_key);
         return bn2bi(bnpriv_key);
